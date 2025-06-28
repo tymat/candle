@@ -637,8 +637,17 @@ pub fn rms_norm_slow(x: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
     };
     let hidden_size = x.dim(D::Minus1)?;
     let x = x.to_dtype(internal_dtype)?;
-    let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
-    let x_normed = x.broadcast_div(&(norm_x + eps as f64)?.sqrt()?)?;
+    let norm_x = match internal_dtype {
+        DType::F32 => (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f32)?,
+        _ => (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?,
+    };
+    // Add epsilon using a tensor to avoid scalar operations
+    let eps_tensor = match internal_dtype {
+        DType::F32 => Tensor::new(&[eps], x.device())?,
+        DType::F64 => Tensor::new(&[eps as f64], x.device())?,
+        _ => return Err(candle::Error::UnsupportedDTypeForOp(internal_dtype, "rms_norm").bt()),
+    };
+    let x_normed = x.broadcast_div(&norm_x.broadcast_add(&eps_tensor)?.sqrt()?)?;
     x_normed.to_dtype(x_dtype)?.broadcast_mul(alpha)
 }
 
@@ -894,7 +903,14 @@ pub fn layer_norm_slow(x: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> R
     let var_x = x.sqr()?.mean_keepdim(D::Minus1)?;
     
     // Create epsilon as a tensor for proper gradient flow
-    let eps_tensor = Tensor::new(&[eps as f64], x.device())?.to_dtype(internal_dtype)?;
+    // Create the tensor directly in the target dtype to avoid conversion issues on Metal
+    let eps_tensor = match internal_dtype {
+        DType::F32 => Tensor::new(&[eps], x.device())?,
+        DType::F64 => Tensor::new(&[eps as f64], x.device())?,
+        DType::F16 => Tensor::new(&[eps], x.device())?.to_dtype(DType::F16)?,
+        DType::BF16 => Tensor::new(&[eps], x.device())?.to_dtype(DType::BF16)?,
+        _ => return Err(candle::Error::UnsupportedDTypeForOp(internal_dtype, "layer_norm").bt()),
+    };
     
     // Use broadcast_add for adding epsilon to maintain gradient tracking
     let std_x = var_x.broadcast_add(&eps_tensor)?.sqrt()?;
