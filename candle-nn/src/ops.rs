@@ -637,10 +637,7 @@ pub fn rms_norm_slow(x: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
     };
     let hidden_size = x.dim(D::Minus1)?;
     let x = x.to_dtype(internal_dtype)?;
-    let norm_x = match internal_dtype {
-        DType::F32 => (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f32)?,
-        _ => (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?,
-    };
+    let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
     // Add epsilon using a tensor to avoid scalar operations
     let eps_tensor = match internal_dtype {
         DType::F32 => Tensor::new(&[eps], x.device())?,
