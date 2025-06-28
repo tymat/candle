@@ -129,7 +129,14 @@ impl Module for LayerNorm {
         let var_x = x.sqr()?.mean_keepdim(D::Minus1)?;
         
         // Create epsilon as a tensor for proper gradient flow
-        let eps_tensor = Tensor::new(&[self.eps], x.device())?.to_dtype(internal_dtype)?;
+        // Create the tensor directly in the target dtype to avoid conversion issues on Metal
+        let eps_tensor = match internal_dtype {
+            DType::F32 => Tensor::new(&[self.eps as f32], x.device())?,
+            DType::F64 => Tensor::new(&[self.eps], x.device())?,
+            DType::F16 => Tensor::new(&[self.eps as f32], x.device())?.to_dtype(DType::F16)?,
+            DType::BF16 => Tensor::new(&[self.eps as f32], x.device())?.to_dtype(DType::BF16)?,
+            _ => return Err(candle::Error::UnsupportedDTypeForOp(internal_dtype, "layer_norm").bt()),
+        };
         
         // Use broadcast_add for adding epsilon to maintain gradient tracking
         let std_x = var_x.broadcast_add(&eps_tensor)?.sqrt()?;
