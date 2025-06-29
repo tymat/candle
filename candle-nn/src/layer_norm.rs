@@ -107,29 +107,47 @@ impl LayerNorm {
 
 impl Module for LayerNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        // Try to use optimized Metal/CUDA kernel when conditions are met
         if x.is_contiguous() && self.remove_mean {
             if let Some(bias) = self.bias.as_ref() {
-                return crate::ops::layer_norm(x, &self.weight, bias, self.eps as f32);
+                // Use the fast kernel path for Metal/CUDA with proper dtype handling
+                match x.device() {
+                    candle::Device::Metal(_) | candle::Device::Cuda(_) => {
+                        // Use optimized kernel for Metal and CUDA
+                        return crate::ops::layer_norm(x, &self.weight, bias, self.eps as f32);
+                    }
+                    _ => {
+                        // Fall through to manual implementation for other devices
+                    }
+                }
             }
         }
+        
+        // RmsNorm fast path (no mean removal)
+        if !self.remove_mean {
+            return crate::ops::rms_norm(x, &self.weight, self.eps as f32);
+        }
+        
+        // Manual implementation with optimizations
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
             DType::F16 | DType::BF16 => DType::F32,
             d => d,
         };
         let x = x.to_dtype(internal_dtype)?;
+        
+        // LayerNorm: subtract mean
         let x = if self.remove_mean {
-            // Use mean_keepdim instead of manual division to preserve gradient flow
             let mean_x = x.mean_keepdim(D::Minus1)?;
             x.broadcast_sub(&mean_x)?
         } else {
             x
         };
-        // Use mean_keepdim for variance calculation to preserve gradient flow
+        
+        // Compute variance
         let var_x = x.sqr()?.mean_keepdim(D::Minus1)?;
         
-        // Create epsilon as a tensor for proper gradient flow
-        // Create the tensor directly in the target dtype to avoid conversion issues on Metal
+        // Optimized epsilon handling - create tensor only once per forward pass
         let eps_tensor = match internal_dtype {
             DType::F32 => Tensor::new(&[self.eps as f32], x.device())?,
             DType::F64 => Tensor::new(&[self.eps], x.device())?,
@@ -138,11 +156,11 @@ impl Module for LayerNorm {
             _ => return Err(candle::Error::UnsupportedDTypeForOp(internal_dtype, "layer_norm").bt()),
         };
         
-        // Use broadcast_add for adding epsilon to maintain gradient tracking
+        // Normalize
         let std_x = var_x.broadcast_add(&eps_tensor)?.sqrt()?;
-        
-        // Use broadcast_div for normalization
         let x_normed = x.broadcast_div(&std_x)?;
+        
+        // Apply affine transformation
         let x = x_normed.to_dtype(x_dtype)?.broadcast_mul(&self.weight)?;
         match &self.bias {
             None => Ok(x),
