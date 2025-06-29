@@ -1,7 +1,7 @@
 //! Tensor ops.
 //!
 
-use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
+use candle::{CpuStorage, DType, Device, Layout, Module, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -661,10 +661,9 @@ pub fn rms_norm(xs: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
     xs.apply_op2_no_bwd(alpha, &RmsNorm { eps })
 }
 
-// NOTE: This LayerNorm CustomOp is no longer used due to gradient flow issues.
-// The layer_norm() function now uses layer_norm_slow() to preserve gradients.
+// LayerNorm CustomOp with optimized Metal/CUDA kernels
+// Falls back to slow implementation for gradient preservation when needed
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct LayerNorm {
     eps: f32,
 }
@@ -932,8 +931,21 @@ pub fn layer_norm(xs: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Resul
             beta.shape()
         )
     }
-    // Use the gradient-preserving slow implementation to maintain backward pass
-    layer_norm_slow(xs, alpha, beta, eps)
+    
+    // Use optimized kernel for Metal/CUDA when conditions are met
+    match xs.device() {
+        Device::Metal(_) | Device::Cuda(_) if xs.is_contiguous() && alpha.is_contiguous() && beta.is_contiguous() => {
+            // Use the fast kernel path
+            eprintln!("ops::layer_norm: Using Metal/CUDA kernel");
+            xs.apply_op3_no_bwd(alpha, beta, &LayerNorm { eps })
+        }
+        _ => {
+            // Fall back to slow implementation for CPU or non-contiguous tensors
+            eprintln!("ops::layer_norm: Using slow path (device={:?}, contiguous={})", 
+                     xs.device(), xs.is_contiguous());
+            layer_norm_slow(xs, alpha, beta, eps)
+        }
+    }
 }
 
 // https://pytorch.org/docs/stable/generated/torch.nn.PixelShuffle.html

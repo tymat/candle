@@ -114,6 +114,7 @@ impl Module for LayerNorm {
                 match x.device() {
                     candle::Device::Metal(_) | candle::Device::Cuda(_) => {
                         // Use optimized kernel for Metal and CUDA
+                        eprintln!("LayerNorm: Using optimized Metal/CUDA kernel");
                         return crate::ops::layer_norm(x, &self.weight, bias, self.eps as f32);
                     }
                     _ => {
@@ -129,6 +130,8 @@ impl Module for LayerNorm {
         }
         
         // Manual implementation with optimizations
+        eprintln!("LayerNorm: Using slow manual implementation (contiguous={}, remove_mean={}, has_bias={})", 
+                  x.is_contiguous(), self.remove_mean, self.bias.is_some());
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
             DType::F16 | DType::BF16 => DType::F32,
