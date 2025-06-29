@@ -29,6 +29,7 @@
 //!
 //! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
 use candle::{DType, Module, Result, Tensor, D};
+use std::sync::Once;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerNormConfig {
@@ -107,6 +108,17 @@ impl LayerNorm {
 
 impl Module for LayerNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            eprintln!("=== LayerNorm Debug Info ===");
+            eprintln!("Device: {:?}", x.device());
+            eprintln!("Shape: {:?}", x.shape());
+            eprintln!("Contiguous: {}", x.is_contiguous());
+            eprintln!("Remove mean: {}", self.remove_mean);
+            eprintln!("Has bias: {}", self.bias.is_some());
+            eprintln!("========================");
+        });
+        
         // Try to use optimized Metal/CUDA kernel when conditions are met
         if x.is_contiguous() && self.remove_mean {
             if let Some(bias) = self.bias.as_ref() {
