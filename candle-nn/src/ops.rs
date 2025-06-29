@@ -936,13 +936,10 @@ pub fn layer_norm(xs: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Resul
     match xs.device() {
         Device::Metal(_) | Device::Cuda(_) if xs.is_contiguous() && alpha.is_contiguous() && beta.is_contiguous() => {
             // Use the fast kernel path
-            eprintln!("ops::layer_norm: Using Metal/CUDA kernel");
             xs.apply_op3_no_bwd(alpha, beta, &LayerNorm { eps })
         }
         _ => {
             // Fall back to slow implementation for CPU or non-contiguous tensors
-            eprintln!("ops::layer_norm: Using slow path (device={:?}, contiguous={})", 
-                     xs.device(), xs.is_contiguous());
             layer_norm_slow(xs, alpha, beta, eps)
         }
     }
